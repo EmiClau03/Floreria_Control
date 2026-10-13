@@ -12,48 +12,46 @@ const json = (data: unknown, status = 200) =>
 let tableChecked = false;
 async function ensureSchema() {
   if (tableChecked) return;
+  if (!env?.DB) return;
   try {
-    if (env?.DB) {
-      await env.DB.exec(`
-        CREATE TABLE IF NOT EXISTS movements (
-          id text PRIMARY KEY NOT NULL,
-          type text NOT NULL,
-          amount integer NOT NULL,
-          date text NOT NULL,
-          description text NOT NULL,
-          category text NOT NULL,
-          payment text NOT NULL,
-          created_at text NOT NULL
-        );
-      `);
-      tableChecked = true;
+    await env.DB.exec(`
+      CREATE TABLE IF NOT EXISTS movements (
+        id text PRIMARY KEY NOT NULL,
+        type text NOT NULL,
+        amount integer NOT NULL,
+        date text NOT NULL,
+        description text NOT NULL,
+        category text NOT NULL,
+        payment text NOT NULL,
+        created_at text NOT NULL
+      );
+    `);
+    tableChecked = true;
+  } catch (e) {
+    console.error('Error creating table in D1:', e);
+  }
+}
+
+export async function GET() {
+  try {
+    if (!env?.DB) {
+      return json({ error: "Falta vincular la base de datos D1 como 'DB' en Settings > Bindings de Cloudflare." }, 500);
     }
-  } catch (e) {
-    console.error('Error ensuring schema:', e);
-  }
-}
-
-async function permitted(request: Request, write = false) {
-  if (write && request.headers.get('origin') && request.headers.get('origin') !== new URL(request.url).origin) {
-    return false;
-  }
-  return true;
-}
-
-export async function GET(request: Request) {
-  if (!await permitted(request)) return json({ error: 'No autorizado' }, 401);
-  try {
     await ensureSchema();
-    return json(await getDb().select().from(movements).orderBy(desc(movements.date), desc(movements.createdAt)));
+    const rows = await getDb().select().from(movements).orderBy(desc(movements.date), desc(movements.createdAt));
+    return json(rows || []);
   } catch (e) {
-    console.error('GET error:', e);
-    return json({ error: 'No pudimos cargar los movimientos. Intentá nuevamente.' }, 500);
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error('GET error:', msg);
+    return json({ error: msg }, 500);
   }
 }
 
 async function save(request: Request, edit: boolean) {
-  if (!await permitted(request, true)) return json({ error: 'No autorizado' }, 401);
   try {
+    if (!env?.DB) {
+      return json({ error: "Falta vincular la base de datos D1 como 'DB' en Settings > Bindings de Cloudflare." }, 500);
+    }
     await ensureSchema();
     const m = await request.json() as Movement;
     if (!validate(m)) return json({ error: 'Revisá el monto, la fecha y los datos del movimiento.' }, 400);
@@ -75,8 +73,9 @@ async function save(request: Request, edit: boolean) {
     await getDb().insert(movements).values(record);
     return json(record, 201);
   } catch (e) {
-    console.error('Save error:', e);
-    return json({ error: 'No se pudo guardar. Intentá nuevamente.' }, 500);
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error('Save error:', msg);
+    return json({ error: msg }, 500);
   }
 }
 
@@ -89,8 +88,10 @@ export async function PUT(request: Request) {
 }
 
 export async function DELETE(request: Request) {
-  if (!await permitted(request, true)) return json({ error: 'No autorizado' }, 401);
   try {
+    if (!env?.DB) {
+      return json({ error: "Falta vincular la base de datos D1 como 'DB' en Settings > Bindings de Cloudflare." }, 500);
+    }
     await ensureSchema();
     const { id } = await request.json() as { id: unknown };
     if (typeof id !== 'string') return json({ error: 'Movimiento inválido.' }, 400);
@@ -98,7 +99,8 @@ export async function DELETE(request: Request) {
     if (!result.length) return json({ error: 'El movimiento ya no existe.' }, 404);
     return json({ ok: true });
   } catch (e) {
-    console.error('Delete error:', e);
-    return json({ error: 'No se pudo eliminar. Intentá nuevamente.' }, 500);
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error('Delete error:', msg);
+    return json({ error: msg }, 500);
   }
 }

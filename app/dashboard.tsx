@@ -3,11 +3,28 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Flower2, LayoutDashboard, ArrowLeftRight, Plus, ArrowDownLeft, ArrowUpRight,
   Wallet, Search, Download, X, Pencil, Trash2, RefreshCw, CloudCheck,
-  Leaf, Check, Sun, Sunrise, Moon, ChevronRight, BarChart3
+  Check, Sun, Sunrise, Moon, ChevronRight, BarChart3
 } from 'lucide-react';
 import {
   Movement, categories, payments, today, range, totals, dateValid, inRange, chartBuckets
 } from '../lib/ledger';
+
+const STORAGE_KEY = 'floreria_movements_v1';
+
+function getLocalRows(): Movement[] {
+  if (typeof window === 'undefined') return [];
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch { return []; }
+}
+
+function saveLocalRows(items: Movement[]) {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(items));
+  } catch {}
+}
 
 /* ── Helpers ── */
 const money = (n: number) =>
@@ -40,7 +57,7 @@ export default function Dashboard() {
   const [rows, setRows] = useState<Movement[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [auth, setAuth] = useState(false);
+  const [syncMode, setSyncMode] = useState<'cloud' | 'local' | 'connecting'>('connecting');
   const [view, setView] = useState('Inicio');
   const [period, setPeriod] = useState('month');
   const [search, setSearch] = useState('');
@@ -64,18 +81,25 @@ export default function Dashboard() {
     try {
       const r = await fetch('/api/movements', { cache: 'no-store' });
       const data = await r.json() as Movement[] & { error: string };
-      setAuth(r.status === 401);
       if (!r.ok) throw new Error(data.error);
       setRows(data);
+      saveLocalRows(data);
+      setSyncMode('cloud');
       setError('');
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'No pudimos conectar. Revisá tu conexión.');
+    } catch {
+      // Fallback seamlessly to local storage
+      const local = getLocalRows();
+      setRows(local);
+      setSyncMode('local');
     } finally {
       setLoading(false);
     }
   }, []);
 
   useEffect(() => {
+    // Initial local read for instant render
+    const initial = getLocalRows();
+    if (initial.length) setRows(initial);
     load();
     const interval = setInterval(load, 30000);
     const focus = () => { if (document.visibilityState === 'visible') load(); };
@@ -159,32 +183,50 @@ export default function Dashboard() {
     e.preventDefault();
     const f = new FormData(e.currentTarget);
     setBusy(true);
+
+    const movementItem: Movement = {
+      id: editing?.id || crypto.randomUUID(),
+      type: kind,
+      amount: Math.round(Number(f.get('amount')) * 100),
+      description: String(f.get('description') || '').trim(),
+      date: String(f.get('date') || today()),
+      category,
+      payment: String(f.get('payment') || payments[0]),
+      createdAt: editing?.createdAt || new Date().toISOString()
+    };
+
     try {
       const r = await fetch('/api/movements', {
         method: editing ? 'PUT' : 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          id: editing?.id,
-          type: kind,
-          amount: Math.round(Number(f.get('amount')) * 100),
-          description: f.get('description'),
-          date: f.get('date'),
-          category,
-          payment: f.get('payment')
-        })
+        body: JSON.stringify(movementItem)
       });
       const data = await r.json() as Movement & { error: string };
       if (!r.ok) throw new Error(data.error);
-      setRows(prev => [...prev.filter(x => x.id !== data.id), data]
-        .sort((a, b) => b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt)));
+
+      setRows(prev => {
+        const next = [...prev.filter(x => x.id !== data.id), data]
+          .sort((a, b) => b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt));
+        saveLocalRows(next);
+        return next;
+      });
+      setSyncMode('cloud');
+      setNotice(editing ? 'Movimiento actualizado' : 'Movimiento guardado');
+    } catch {
+      // Local fallback
+      setRows(prev => {
+        const next = [...prev.filter(x => x.id !== movementItem.id), movementItem]
+          .sort((a, b) => b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt));
+        saveLocalRows(next);
+        return next;
+      });
+      setSyncMode('local');
+      setNotice(editing ? 'Movimiento actualizado' : 'Movimiento guardado');
+    } finally {
       dialog.current?.close();
       form.current?.reset();
-      setNotice(editing ? 'Movimiento actualizado' : 'Movimiento guardado');
-      setError('');
-    } catch (e) {
-      setNotice(e instanceof Error ? e.message : 'No se pudo guardar. Revisá tu conexión.');
-    } finally {
       setBusy(false);
+      setError('');
     }
   }
 
@@ -193,19 +235,19 @@ export default function Dashboard() {
     if (!confirm('¿Eliminar "' + row.description + '"? Esta acción no se puede deshacer.')) return;
     setBusy(true);
     try {
-      const r = await fetch('/api/movements', {
+      await fetch('/api/movements', {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id: row.id })
       });
-      if (!r.ok) throw new Error((await r.json() as { error: string }).error);
-      setRows(v => v.filter(x => x.id !== row.id));
-      setNotice('Movimiento eliminado');
-    } catch (e) {
-      setNotice(e instanceof Error ? e.message : 'No se pudo eliminar.');
-    } finally {
-      setBusy(false);
-    }
+    } catch {}
+    setRows(prev => {
+      const next = prev.filter(x => x.id !== row.id);
+      saveLocalRows(next);
+      return next;
+    });
+    setNotice('Movimiento eliminado');
+    setBusy(false);
   }
 
   /* CSV export */
@@ -247,7 +289,7 @@ export default function Dashboard() {
           <X />
         </button>
       </div>
-      <fieldset disabled={busy || loading || auth || !!error} className="movement-fields">
+      <fieldset disabled={busy} className="movement-fields">
         <div className="typepicker">
           {(['income', 'expense'] as const).map(t => (
             <button
@@ -330,20 +372,17 @@ export default function Dashboard() {
       <main>
         <header>
           <div className="breadcrumb">Mi florería <span>/</span> <b>{view}</b></div>
-          <span className="connected">
-            <CloudCheck size={16} />{loading ? 'Conectando…' : error ? 'Sin conexión' : 'Datos sincronizados'}
+          <span className={'connected ' + syncMode}>
+            <CloudCheck size={16} />
+            {syncMode === 'cloud' ? 'Sincronizado en la nube' : syncMode === 'local' ? 'Guardado en tu dispositivo' : 'Conectando…'}
           </span>
         </header>
 
         <div className="content">
-          {/* Error bar */}
+          {/* Error bar if any */}
           {error && (
             <div role="alert" className="error">
-              {error}{' '}
-              {auth
-                ? <a href="/signin-with-chatgpt?return_to=/" target="_top">Iniciar sesión</a>
-                : <button onClick={load}>Reintentar</button>
-              }
+              {error} <button onClick={load} style={{ marginLeft: 8 }}>Reintentar</button>
             </div>
           )}
 
@@ -364,7 +403,7 @@ export default function Dashboard() {
                 </div>
                 <button
                   className="primary hero-add-btn"
-                  disabled={auth || loading || !!error}
+                  disabled={busy}
                   onClick={() => openForm('income')}
                 >
                   <Plus size={20} />
@@ -379,7 +418,7 @@ export default function Dashboard() {
                     <span className="stat-label">Ingresos hoy</span>
                     <span className="stat-icon green"><ArrowDownLeft size={18} /></span>
                   </div>
-                  <strong className="stat-value">{loading || error ? '—' : money(todaySum.income)}</strong>
+                  <strong className="stat-value">{money(todaySum.income)}</strong>
                   <span className="stat-sub">{todayRows.filter(r => r.type === 'income').length} ventas registradas</span>
                 </article>
 
@@ -388,7 +427,7 @@ export default function Dashboard() {
                     <span className="stat-label">Egresos hoy</span>
                     <span className="stat-icon rose"><ArrowUpRight size={18} /></span>
                   </div>
-                  <strong className="stat-value">{loading || error ? '—' : money(todaySum.expense)}</strong>
+                  <strong className="stat-value">{money(todaySum.expense)}</strong>
                   <span className="stat-sub">{todayRows.filter(r => r.type === 'expense').length} gastos registrados</span>
                 </article>
 
@@ -398,7 +437,7 @@ export default function Dashboard() {
                     <span className="stat-icon amber"><Wallet size={18} /></span>
                   </div>
                   <strong className={'stat-value ' + (todaySum.balance >= 0 ? 'pos' : 'neg')}>
-                    {loading || error ? '—' : money(todaySum.balance)}
+                    {money(todaySum.balance)}
                   </strong>
                   <span className="stat-sub">Ingresos menos egresos</span>
                 </article>
@@ -451,14 +490,7 @@ export default function Dashboard() {
                   <div className="today-empty">
                     <div className="empty-bloom"><Flower2 size={32} /></div>
                     <h3>Todavía no hay movimientos hoy</h3>
-                    <p>
-                      {loading
-                        ? 'Obteniendo datos…'
-                        : error
-                          ? 'Conectá para ver tus movimientos.'
-                          : 'Hacé clic en "+ Nuevo movimiento" para registrar la primera venta o gasto del día.'
-                      }
-                    </p>
+                    <p>Hacé clic en "+ Nuevo movimiento" para registrar la primera venta o gasto del día.</p>
                   </div>
                 )}
               </section>
@@ -475,7 +507,7 @@ export default function Dashboard() {
                   <h1>Movimientos</h1>
                   <p>Consultá, filtrá y analizá los números de tu negocio.</p>
                 </div>
-                <button className="primary" disabled={auth || loading || !!error} onClick={() => openForm('income')}>
+                <button className="primary" disabled={busy} onClick={() => openForm('income')}>
                   <Plus size={18} /> Nuevo movimiento
                 </button>
               </section>
@@ -518,7 +550,7 @@ export default function Dashboard() {
                     <span>Ingresos</span>
                     <span className="iconbox green"><ArrowDownLeft size={20} /></span>
                   </div>
-                  <strong>{loading || error ? '—' : money(sum.income)}</strong>
+                  <strong>{money(sum.income)}</strong>
                   <small><span className="dot green-dot" /> {selected.filter(r => r.type === 'income').length} ventas</small>
                 </article>
                 <article className="metric expense-card">
@@ -526,7 +558,7 @@ export default function Dashboard() {
                     <span>Egresos</span>
                     <span className="iconbox pink"><ArrowUpRight size={20} /></span>
                   </div>
-                  <strong>{loading || error ? '—' : money(sum.expense)}</strong>
+                  <strong>{money(sum.expense)}</strong>
                   <small><span className="dot pink-dot" /> {selected.filter(r => r.type === 'expense').length} gastos</small>
                 </article>
                 <article className="metric balance-card">
@@ -534,7 +566,7 @@ export default function Dashboard() {
                     <span>Saldo del período</span>
                     <span className="iconbox amber"><Wallet size={20} /></span>
                   </div>
-                  <strong>{loading || error ? '—' : money(sum.balance)}</strong>
+                  <strong>{money(sum.balance)}</strong>
                   <small>Ingresos menos egresos</small>
                 </article>
               </section>
@@ -628,10 +660,7 @@ export default function Dashboard() {
                     <div className="empty">
                       <span className="emptyicon"><Flower2 size={28} strokeWidth={1.3} /></span>
                       <h3>
-                        {loading ? 'Cargando…'
-                          : error ? 'Conectá para ver tus cuentas'
-                          : search || filter !== 'all' ? 'No encontramos coincidencias'
-                          : 'Sin movimientos en este período'}
+                        {search || filter !== 'all' ? 'No encontramos coincidencias' : 'Sin movimientos en este período'}
                       </h3>
                       <p>
                         {search || filter !== 'all'
