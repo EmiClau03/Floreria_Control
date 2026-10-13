@@ -14,21 +14,21 @@ async function ensureSchema() {
   if (tableChecked) return;
   if (!env?.DB) return;
   try {
-    await env.DB.exec(`
-      CREATE TABLE IF NOT EXISTS movements (
-        id text PRIMARY KEY NOT NULL,
-        type text NOT NULL,
-        amount integer NOT NULL,
-        date text NOT NULL,
-        description text NOT NULL,
-        category text NOT NULL,
-        payment text NOT NULL,
-        created_at text NOT NULL
-      );
-    `);
+    await env.DB.prepare(
+      "CREATE TABLE IF NOT EXISTS movements (id TEXT PRIMARY KEY NOT NULL, type TEXT NOT NULL, amount INTEGER NOT NULL, date TEXT NOT NULL, description TEXT NOT NULL, category TEXT NOT NULL, payment TEXT NOT NULL, created_at TEXT NOT NULL)"
+    ).run();
     tableChecked = true;
   } catch (e) {
-    console.error('Error creating table in D1:', e);
+    try {
+      await env.DB.exec(
+        "CREATE TABLE IF NOT EXISTS movements (id TEXT PRIMARY KEY NOT NULL, type TEXT NOT NULL, amount INTEGER NOT NULL, date TEXT NOT NULL, description TEXT NOT NULL, category TEXT NOT NULL, payment TEXT NOT NULL, created_at TEXT NOT NULL);"
+      );
+      tableChecked = true;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error('Error creating table in D1:', msg);
+      throw new Error('Inicializando tabla D1: ' + msg);
+    }
   }
 }
 
