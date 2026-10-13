@@ -8,7 +8,7 @@ import { connectorPreview } from "./build/connector-preview-plugin.mjs";
 const SITE_CREATOR_PLACEHOLDER_DATABASE_ID =
   process.env.D1_DATABASE_ID ||
   process.env.DATABASE_ID ||
-  "00000000-0000-4000-8000-000000000000";
+  "05bede9d-2df2-4637-a917-1c1086866818";
 
 const D1_DATABASE_NAME = process.env.D1_DATABASE_NAME || "floreria-db";
 
