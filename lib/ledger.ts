@@ -1,5 +1,5 @@
 export type Movement={id:string;type:'income'|'expense';amount:number;date:string;description:string;category:string;payment:string;createdAt:string};
-export const categories={income:['Ramos y arreglos','Plantas','Eventos','Otros ingresos'],expense:['Flores e insumos','Packaging','Alquiler','Servicios','Envíos','Otros egresos']};
+export const categories={income:['Ramos y arreglos','Eventos','Otros ingresos'],expense:['Flores e insumos','Packaging','Alquiler','Servicios','Envíos','Otros egresos']};
 export const payments=['Efectivo','Transferencia','Tarjeta'];
 export function today(){return new Intl.DateTimeFormat('en-CA',{timeZone:'America/Argentina/Buenos_Aires',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());}
 export function dateValid(s:unknown):s is string {if(typeof s!=='string'||!/^\d{4}-\d{2}-\d{2}$/.test(s))return false;const d=new Date(s+'T12:00:00Z');return !isNaN(+d)&&d.toISOString().slice(0,10)===s;}
